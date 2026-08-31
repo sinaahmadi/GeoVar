@@ -1,0 +1,10 @@
+numpy
+scipy
+geopandas
+shapely
+cartopy
+matplotlib
+requests
+SPARQLWrapper
+tqdm
+jupyter

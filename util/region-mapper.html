@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Region Mapper</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; }
+    #map { height: 100vh; width: 100%; cursor: crosshair; }
+    #map.panning { cursor: grab; }
+    .controls {
+      position: absolute; top: 10px; right: 10px; z-index: 1000;
+      background: white; padding: 15px; border-radius: 8px;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.2); max-width: 320px;
+    }
+    .controls h3 { margin-bottom: 10px; color: #333; font-size: 16px; }
+    .btn {
+      display: inline-block; padding: 8px 12px; margin: 3px;
+      border: none; border-radius: 4px; cursor: pointer;
+      font-size: 13px; transition: all 0.2s;
+    }
+    .btn-primary { background: #3388ff; color: white; }
+    .btn-primary:hover { background: #2277ee; }
+    .btn-success { background: #28a745; color: white; }
+    .btn-success:hover { background: #218838; }
+    .btn-danger { background: #dc3545; color: white; }
+    .btn-danger:hover { background: #c82333; }
+    .btn-warning { background: #ffc107; color: #333; }
+    .btn-warning:hover { background: #e0a800; }
+    .btn.active { outline: 3px solid #000; }
+    .region-list {
+      margin-top: 15px; max-height: 180px; overflow-y: auto;
+      border-top: 1px solid #eee; padding-top: 10px;
+    }
+    .region-item {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 8px; margin: 4px 0; background: #f8f9fa; border-radius: 4px;
+    }
+    .region-item span { font-size: 13px; color: #333; }
+    .region-item button {
+      background: none; border: none; color: #dc3545;
+      cursor: pointer; font-size: 16px; padding: 0 5px;
+    }
+    .modal {
+      display: none; position: fixed; top: 0; left: 0;
+      width: 100%; height: 100%; background: rgba(0,0,0,0.5);
+      z-index: 2000; justify-content: center; align-items: center;
+    }
+    .modal.active { display: flex; }
+    .modal-content {
+      background: white; padding: 25px; border-radius: 8px;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.3); min-width: 300px;
+    }
+    .modal-content h4 { margin-bottom: 15px; }
+    .modal-content input {
+      width: 100%; padding: 10px; border: 1px solid #ddd;
+      border-radius: 4px; font-size: 14px; margin-bottom: 15px;
+    }
+    .modal-buttons { display: flex; gap: 10px; justify-content: flex-end; }
+    .status {
+      background: #e7f3ff; padding: 10px; border-radius: 4px;
+      font-size: 12px; margin: 10px 0; color: #0066cc;
+    }
+    .status.drawing { background: #fff3cd; color: #856404; }
+    .button-row { margin: 5px 0; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  
+  <div class="controls">
+    <h3>🗺️ Region Mapper</h3>
+    
+    <div id="status" class="status">Click "Start Drawing" to begin</div>
+    
+    <div class="button-row">
+      <button class="btn btn-primary" id="drawBtn" onclick="toggleDrawing()">✏️ Start Drawing</button>
+      <button class="btn btn-warning" id="undoBtn" onclick="undoPoint()" style="display:none;">↩️ Undo</button>
+      <button class="btn btn-success" id="finishBtn" onclick="finishPolygon()" style="display:none;">✓ Finish</button>
+    </div>
+    
+    <div class="button-row">
+      <button class="btn btn-success" onclick="saveGeoJSON()">💾 Save GeoJSON</button>
+      <button class="btn btn-danger" onclick="clearAll()">🗑️ Clear All</button>
+    </div>
+    
+    <div class="region-list" id="regionList">
+      <p style="color: #999; font-size: 12px;">No regions yet</p>
+    </div>
+  </div>
+  
+  <div class="modal" id="nameModal">
+    <div class="modal-content">
+      <h4>Name this region</h4>
+      <input type="text" id="regionName" placeholder="Enter region name..." />
+      <div class="modal-buttons">
+        <button class="btn btn-danger" onclick="cancelRegion()">Cancel</button>
+        <button class="btn btn-primary" onclick="confirmRegion()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script>
+    const map = L.map('map', { doubleClickZoom: false }).setView([35.7, 51.4], 6);
+    
+    // CARTO (free, reliable for embedded use)
+	L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
+	  attribution: 'Tiles © Esri',
+	  maxZoom: 19
+	}).addTo(map);
+
+    let isDrawing = false;
+    let currentPoints = [];
+    let currentPolyline = null;
+    let currentMarkers = [];
+    let regions = [];
+    let pendingPolygonCoords = null;
+    let regionIdCounter = 0;
+
+    const colors = ['#e6194b', '#3cb44b', '#ffe119', '#4363d8', '#f58231', 
+                    '#911eb4', '#46f0f0', '#f032e6', '#bcf60c', '#fabebe'];
+
+    function generateColor() {
+      return colors[regionIdCounter % colors.length];
+    }
+
+    function updateStatus(msg, drawing = false) {
+      const status = document.getElementById('status');
+      status.textContent = msg;
+      status.className = drawing ? 'status drawing' : 'status';
+    }
+
+    function toggleDrawing() {
+      isDrawing = !isDrawing;
+      const btn = document.getElementById('drawBtn');
+      const undoBtn = document.getElementById('undoBtn');
+      const finishBtn = document.getElementById('finishBtn');
+      const mapEl = document.getElementById('map');
+      
+      if (isDrawing) {
+        btn.textContent = '✖ Cancel';
+        btn.className = 'btn btn-danger';
+        undoBtn.style.display = 'inline-block';
+        finishBtn.style.display = 'inline-block';
+        mapEl.classList.remove('panning');
+        updateStatus('Click on map to add points. Double-click or click Finish to complete.', true);
+        map.dragging.disable();
+      } else {
+        btn.textContent = '✏️ Start Drawing';
+        btn.className = 'btn btn-primary';
+        undoBtn.style.display = 'none';
+        finishBtn.style.display = 'none';
+        mapEl.classList.add('panning');
+        updateStatus('Click "Start Drawing" to begin');
+        clearCurrentDrawing();
+        map.dragging.enable();
+      }
+    }
+
+    function clearCurrentDrawing() {
+      currentPoints = [];
+      if (currentPolyline) {
+        map.removeLayer(currentPolyline);
+        currentPolyline = null;
+      }
+      currentMarkers.forEach(m => map.removeLayer(m));
+      currentMarkers = [];
+    }
+
+    function undoPoint() {
+      if (currentPoints.length > 0) {
+        currentPoints.pop();
+        const marker = currentMarkers.pop();
+        if (marker) map.removeLayer(marker);
+        updatePolyline();
+      }
+    }
+
+    function updatePolyline() {
+      if (currentPolyline) {
+        map.removeLayer(currentPolyline);
+      }
+      if (currentPoints.length > 1) {
+        currentPolyline = L.polyline(currentPoints, { color: '#3388ff', weight: 3, dashArray: '5,5' }).addTo(map);
+      }
+    }
+
+    map.on('click', function(e) {
+      if (!isDrawing) return;
+      
+      currentPoints.push([e.latlng.lat, e.latlng.lng]);
+      
+      const marker = L.circleMarker(e.latlng, {
+        radius: 6, fillColor: '#3388ff', fillOpacity: 1,
+        color: '#fff', weight: 2
+      }).addTo(map);
+      currentMarkers.push(marker);
+      
+      updatePolyline();
+      updateStatus(`${currentPoints.length} points added. Double-click or click Finish to complete.`, true);
+    });
+
+    map.on('dblclick', function(e) {
+      if (isDrawing && currentPoints.length >= 3) {
+        finishPolygon();
+      }
+    });
+
+    function finishPolygon() {
+      if (currentPoints.length < 3) {
+        alert('You need at least 3 points to create a region!');
+        return;
+      }
+      
+      pendingPolygonCoords = [...currentPoints];
+      clearCurrentDrawing();
+      
+      // Reset drawing mode
+      isDrawing = false;
+      document.getElementById('drawBtn').textContent = '✏️ Start Drawing';
+      document.getElementById('drawBtn').className = 'btn btn-primary';
+      document.getElementById('undoBtn').style.display = 'none';
+      document.getElementById('finishBtn').style.display = 'none';
+      document.getElementById('map').classList.add('panning');
+      map.dragging.enable();
+      
+      // Show name modal
+      document.getElementById('nameModal').classList.add('active');
+      document.getElementById('regionName').value = '';
+      setTimeout(() => document.getElementById('regionName').focus(), 100);
+    }
+
+    document.getElementById('regionName').addEventListener('keypress', function(e) {
+      if (e.key === 'Enter') confirmRegion();
+    });
+
+    function confirmRegion() {
+      const name = document.getElementById('regionName').value.trim();
+      if (!name) { alert('Please enter a name'); return; }
+      
+      const id = regionIdCounter++;
+      const color = generateColor();
+      
+      const polygon = L.polygon(pendingPolygonCoords, {
+        color: color, fillColor: color, fillOpacity: 0.35, weight: 2
+      }).addTo(map);
+      
+      polygon.bindPopup(`<b>${name}</b>`);
+      
+      regions.push({ id, name, polygon, coords: pendingPolygonCoords, color });
+      updateRegionList();
+      
+      document.getElementById('nameModal').classList.remove('active');
+      pendingPolygonCoords = null;
+      updateStatus(`Region "${name}" saved! Click "Start Drawing" to add more.`);
+    }
+
+    function cancelRegion() {
+      document.getElementById('nameModal').classList.remove('active');
+      pendingPolygonCoords = null;
+      updateStatus('Region cancelled. Click "Start Drawing" to try again.');
+    }
+
+    function deleteRegion(id) {
+      const region = regions.find(r => r.id === id);
+      if (region) {
+        map.removeLayer(region.polygon);
+        regions = regions.filter(r => r.id !== id);
+        updateRegionList();
+        updateStatus('Region deleted.');
+      }
+    }
+
+    function zoomToRegion(id) {
+      const region = regions.find(r => r.id === id);
+      if (region) {
+        map.fitBounds(region.polygon.getBounds());
+        region.polygon.openPopup();
+      }
+    }
+
+    function updateRegionList() {
+      const list = document.getElementById('regionList');
+      if (regions.length === 0) {
+        list.innerHTML = '<p style="color: #999; font-size: 12px;">No regions yet</p>';
+        return;
+      }
+      list.innerHTML = regions.map(r => `
+        <div class="region-item" onclick="zoomToRegion(${r.id})" style="cursor:pointer;">
+          <span style="border-left: 4px solid ${r.color}; padding-left: 8px;">${r.name}</span>
+          <button onclick="event.stopPropagation(); deleteRegion(${r.id})" title="Delete">×</button>
+        </div>
+      `).join('');
+    }
+
+    function saveGeoJSON() {
+      if (regions.length === 0) { alert('No regions to save!'); return; }
+      
+      const geojson = {
+        type: "FeatureCollection",
+        features: regions.map(r => ({
+          type: "Feature",
+          properties: { name: r.name },
+          geometry: {
+            type: "Polygon",
+            coordinates: [[...r.coords.map(c => [c[1], c[0]]), [r.coords[0][1], r.coords[0][0]]]]
+          }
+        }))
+      };
+      
+      const blob = new Blob([JSON.stringify(geojson, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'regions.geojson';
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function clearAll() {
+      if (regions.length === 0) return;
+      if (confirm('Are you sure you want to delete all regions?')) {
+        regions.forEach(r => map.removeLayer(r.polygon));
+        regions = [];
+        regionIdCounter = 0;
+        updateRegionList();
+        updateStatus('All regions cleared.');
+      }
+    }
+
+    // Initialize
+    document.getElementById('map').classList.add('panning');
+  </script>
+</body>
+</html>

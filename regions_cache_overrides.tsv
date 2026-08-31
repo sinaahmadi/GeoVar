@@ -1,0 +1,11 @@
+qid	name	country	language	type	min_lat	max_lat	min_lon	max_lon
+Q10555	oberpfalz	Germany	German	bbox	49.0	50.0	11.7	13.0
+Q10551	mittelfranken	Germany	German	bbox	49.0	49.9	10.1	11.7
+Q10559	niederbayern	Germany	German	bbox	47.6	49.3	11.7	13.9
+Q10562	oberbayern	Germany	German	bbox	47.3	48.8	10.1	13.1
+Q10554	oberfranken	Germany	German	bbox	49.7	50.5	10.7	11.9
+Q11812551	schwaben	Germany	German	bbox	47.3	48.8	9.7	11.0
+Q10547	unterfranken	Germany	German	bbox	49.5	50.6	8.9	10.8
+Q34374	Crete	Greece	Greek	bbox	34.65	35.95	23.21	26.58
+Q166919	Thessaly	Greece	Greek	bbox	38.95	40.20	21.12	24.43
+Q229	Cyprus	Cyprus	Greek	bbox	34.4	35.8	32.1	34.8
